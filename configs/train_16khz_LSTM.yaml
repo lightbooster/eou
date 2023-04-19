@@ -1,0 +1,224 @@
+hydra:
+  run:
+    dir: outputs/${name}/train
+
+name: &name "eou_${now:%Y-%m-%d_%H-%M-%S}"
+
+debug: False
+cuda_device: &cuda_device "cuda:12"
+
+# data
+sample_rate: &sample_rate 16000
+n_mels: &n_mels 64
+melspec_ms: &melspec_ms 10
+eou_window_size: &eou_window_size 10  # 10 melspec frames of 0.01s = 0.1s window
+
+server_eou_hp: &server_eou_hp
+  eou_ml_threshold: 0.5
+  eou_ml_window_threshold: 3
+  eou_model_type: "ml"
+  eou_non_partial_interval: 0.1
+  eou_threshold: 2.0
+  eou_absolute_ml_threshold: 1.1
+
+# learn hyper parameters
+learner:
+  comment: *name
+  cuda_device: *cuda_device
+  batch_size: &batch_size 32
+  learning_rate: 0.00003
+  weight_decay: 0.0
+  opt_step: 1
+  opt_gamma: 2.0e-5
+  enable_cos_lr: True
+  enable_warmup: False
+  epochs: &epochs 80
+  epochs_scheduler: &epochs_scheduler 77
+  loss_coef_scheduler:
+    epochs: 77
+    start: 0.5
+    end: 0.5
+  show_server_like_metrics: True
+  server_eou_hp: *server_eou_hp
+  pretrained_checkpoint: "../pretrain/eou_vad_checkpoint.pt"        # to initialize model's weights
+  continue_from_checkpoint: False  # to load optimizer state from checkpoint
+  output_checkpoint: "./eou_vad_checkpoint.pt"  # relative path to save in log dir
+
+  # quadratic loss
+  quad_loss:
+    max_value: 10.0
+    loss_type: ''             # ('AREA', 'FP') or empty
+    quad_area: -1                 # for 'AREA' type, -1 to disable
+    quad_left: False              # for 'AREA' type
+    quad_right: False             # for 'AREA' type
+    quad_fp_prob_threshold: 0.99  # for 'FP' type
+
+# model description
+recipe:
+  model_type: "LSTM"   # ("LSTM", "CONV_LSTM")
+  batch_size: *batch_size
+  eou_window_size: *eou_window_size
+  n_mels: *n_mels
+  # lstm layer
+  hidden_size: 128
+  num_layers: 2
+  # conv layer (over single eou window)
+  out_channels: 5
+  kernel_size: 4
+  stride: 2
+  padding: 0
+  # common
+  dropout: 0.25
+
+exporter:
+  cuda_device: *cuda_device
+  output_onnx: "./eou_vad.onnx"
+  output_json: "./output.json"
+  threshold: 1.0e-07
+
+# only for learning from wavs
+augmentator: &augmentator
+  augmentations: [
+    [ 
+      {name: Zeroing, kwargs: {frame_size: 80,   use_vad: False, probability: 0.2}},
+      {name: NoiseInjection, kwargs: {noise_color: "white", volume: 0.001}}
+    ],
+
+    [ {name: VolumeFluctuations, kwargs: {period_seconds: 1.0, volume_min: 0.1, volume_max: 1.0}}],
+    [ {name: VolumeFluctuations, kwargs: {period_seconds: 2.0, volume_min: 0.1, volume_max: 1.0}}],
+    [ {name: VolumeFluctuations, kwargs: {period_seconds: 5.0, volume_min: 0.1, volume_max: 1.0}}],
+
+    [ {name: GainScaling, kwargs: {gain: 0.001}}],
+    [ {name: GainScaling, kwargs: {gain: 0.01}}],
+    [ {name: GainScaling, kwargs: {gain: 10}}],
+    [ {name: GainScaling, kwargs: {gain: 100}}],
+
+    [ {name: 'GainStep', kwargs: {gain: 0.50}} ],
+    [ {name: 'GainStep', kwargs: {gain: 0.25}} ],
+    [ {name: 'GainStep', kwargs: {gain: 0.10}} ],
+    [ {name: 'GainStep', kwargs: {gain: 2}}  ],
+    [ {name: 'GainStep', kwargs: {gain: 4}}  ],
+    [ {name: 'GainStep', kwargs: {gain: 10}} ],
+
+    [ {name: 'FreqGainStep', kwargs: {mode: enm:FrequencyPassMode.LOW, frequency: 2000, gain: 0.50}} ],
+    [ {name: 'FreqGainStep', kwargs: {mode: enm:FrequencyPassMode.LOW, frequency: 2000, gain: 0.25}} ],
+    [ {name: 'FreqGainStep', kwargs: {mode: enm:FrequencyPassMode.LOW, frequency: 2000, gain: 0.10}} ],
+
+    [
+      {name: 'Normalize', kwargs: {gain: 0.3}},
+      {name: 'RandomGain', kwargs: {gain_min: 0.75, gain_max: 1.5}},
+      {name: 'BackgroundInjectionFromDir',
+       kwargs: {
+        pool_dir: '/raid/asapozhnikov/data/surface_val_tv_music/',
+        weight_injection: 0.5,
+        sample_rate: 16000,
+       }
+      },
+      {name: 'RandomGain', kwargs: {gain_min: 0.05, gain_max: 10}},
+    ],
+
+    [
+      {name: 'Normalize', kwargs: {gain: 0.3}},
+      {name: 'RandomGain', kwargs: {gain_min: 0.75, gain_max: 1.5}},
+      {name: 'BackgroundInjectionFromDir',
+       kwargs: {
+        pool_dir: '/raid/asapozhnikov/data/boom_tv_music_norm/',
+        weight_injection: 0.5,
+        sample_rate: 16000,
+       }
+      },
+      {name: 'RandomGain', kwargs: {gain_min: 0.05, gain_max: 10}},
+    ],
+
+    [
+      {name: 'Normalize', kwargs: {gain: 0.3}},
+      {name: 'RandomGain', kwargs: {gain_min: 0.5, gain_max: 1.0}},
+      {name: 'BackgroundInjection',
+       kwargs: {
+        pool: ['/home/asapozhnikov/projects/eou/data/pop_music_16khz_augm.wav'],
+        weight_injection: 0.5,
+        sample_rate: 16000,
+       }
+      },
+      {name: 'RandomGain', kwargs: {gain_min: 0.05, gain_max: 10.0}},
+      {name: 'GainScaling', kwargs: {gain: 1.0}}
+    ],
+
+    [],
+  ]
+
+  probabilities: [
+    # Zeroing
+    0.01,
+    # VolumeFluctuations
+    0.025, 0.025, 0.025,
+    # Gain
+    0.03, 0.02, 0.02, 0.03,
+    # Step
+    0.015, 0.015, 0.01, 0.01, 0.005, 0.005, 0.015, 0.015, 0.01,
+    # TV Music Bg Farfield
+    0.075,
+    # TV Music Bg Boom
+    0.075,
+    # Music Augm
+    0.025,
+    # No aug
+    0.8,
+  ]
+# only for learning from wavs
+feature_extraction_params: &feature_extraction_params
+  sampling_freq: *sample_rate
+  # !!!
+  normalize_gain: False
+  dithering_dynamic: True
+  dither_val: 1.0e-05
+  high_freq_filterbank: 8000
+
+
+# datasets
+min_silence_len: &min_silence_len -10.0            # length of pause after speech; negative values to allow zero labels
+pad_target_seconds: &pad_target_seconds 0.5        # add seconds to the target eou; allows to delay the growth of probs
+pad_unigram_seconds: &pad_unigram_seconds 0.2      # add seconds to the unigram eou; allows to delay the growth of probs
+remove_empty_samples: &remove_empty_samples True   # remove samples without hypothesis
+unigrams: &unigrams ['да', 'нет', 'спасибо',
+                     'подтверждаю', 'стоп', 'хватит', 'отмена',
+                     'назад', 'выключись', 'подсказка', 'продолжить', 'дальше']
+
+train_ds:
+  manifest_path: [
+    "/home/asapozhnikov/projects/eou/data/eou_vad_dataset_16khz/train.tsv",
+  ]
+  batch_size: *batch_size
+  sample_rate: *sample_rate
+  n_mels: *n_mels
+  melspec_ms: *melspec_ms
+  eou_window_size: *eou_window_size
+  min_silence_len: *min_silence_len
+  remove_empty_samples: *remove_empty_samples
+  pad_target_seconds: *pad_target_seconds
+  pad_unigram_seconds: *pad_unigram_seconds
+  n_workers: 4
+  prefetch_factor: 2
+  shuffle: True
+  feature_extraction_params: *feature_extraction_params
+  unigrams: *unigrams
+  augmentor: *augmentator
+
+valid_ds:
+  manifest_path: [
+    "/home/asapozhnikov/projects/eou/data/eou_vad_dataset_16khz/valid.tsv",
+  ]
+  batch_size: *batch_size
+  sample_rate: *sample_rate
+  n_mels: *n_mels
+  melspec_ms: *melspec_ms
+  eou_window_size: *eou_window_size
+  min_silence_len: *min_silence_len
+  pad_target_seconds: *pad_target_seconds
+  pad_unigram_seconds: *pad_unigram_seconds
+  remove_empty_samples: *remove_empty_samples
+  n_workers: 2
+  prefetch_factor: 1
+  shuffle: True
+  feature_extraction_params: *feature_extraction_params
+  unigrams: *unigrams
