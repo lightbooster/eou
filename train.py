@@ -27,10 +27,6 @@ from model import EouVadModelTDCLSTM, EouVadLSTM
 from export import Exporter
 
 
-TRAIN_VAD = False
-LOG_FILE_NAME = "vad_log_new04.txt"
-
-
 class Learner:
     def __init__(self, config, model, train_dataloader: DataLoader, valid_dataloader: DataLoader):
         self.config = config

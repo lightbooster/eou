@@ -102,7 +102,7 @@ class EouVadModelTDCLSTM(nn.Module):
         self.n_mels = n_mels
         
         self.conv_prologue = nn.Conv1d(in_channels=n_mels, out_channels=128, kernel_size=3, padding='same')
-        self.b1 = QuartzNetBlock(128, 64, 5, dropout_p=0.2, blocks=2)
+        self.qurtznet = QuartzNetBlock(128, 64, 7, dropout_p=0.2, blocks=2)
         self.conv_epilogue = nn.Conv1d(in_channels=64, out_channels=hidden_size, kernel_size=10)
 
         self.lstm = nn.LSTM(
@@ -137,7 +137,7 @@ class EouVadModelTDCLSTM(nn.Module):
 
         conv_res = self.conv_prologue(input_seq)
         conv_res = self.relu(conv_res)
-        conv_res = self.b1(conv_res)
+        conv_res = self.qurtznet(conv_res)
         conv_res = self.conv_epilogue(conv_res)  # -> [bch_s x seq_s, hid_s, 1]
         conv_res = self.relu(conv_res)
         conv_res = conv_res.reshape(bs_dim, seq_dim, -1)

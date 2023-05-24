@@ -22,10 +22,6 @@ SPOTTER_WORDS = ['салют', 'сбер', 'джой', 'афина', 'алиса
 spotter_words_with_privet = [f"привет {spotter}" for spotter in SPOTTER_WORDS]
 SPOTTER_WORDS += spotter_words_with_privet
 
-UNIGRAMS_TEXTS = UNIGRAMS.copy()
-for unigram in UNIGRAMS:
-    UNIGRAMS_TEXTS += [f"{spotter} {unigram}" for spotter in SPOTTER_WORDS]
-
 
 def get_object_from_string(object_name: str, obj_type='obj') -> object:
     if obj_type not in ['obj', 'enm']:
